@@ -212,6 +212,28 @@ class ReportExporter:
             sections.append(f"- {w}")
         sections.append("")
 
+        # V2 评分拆解
+        if idea_mining_result.score_breakdown:
+            sb = idea_mining_result.score_breakdown
+            sections.append("## V2 评分拆解\n")
+            sections.append(f"- **严格度**：{sb.strictness}")
+            sections.append(f"- **原始综合分**：{sb.raw_scores.get('overall_score', '-')}/10")
+            sections.append(f"- **校准综合分**：{sb.adjusted_scores.get('overall_score', '-')}/10")
+            sections.append(f"- **可信度分**：{round(sb.trust_score * 10, 1)}/10")
+            sections.append(f"- **评分因子**：{sb.final_factor}")
+            sections.append(f"- **输入质量**：{sb.input_quality}")
+            sections.append(f"- **一致性**：{sb.consistency}")
+            sections.append(f"- **可验证性**：{sb.verifiability}")
+            sections.append(f"- **摘要**：{sb.summary}")
+            if sb.issues:
+                sections.append("\n### 质量问题清单")
+                for i, issue in enumerate(sb.issues, 1):
+                    sections.append(f"{i}. [{issue.severity}] {issue.title}")
+                    sections.append(f"   - 详情：{issue.detail}")
+                    sections.append(f"   - 建议：{issue.suggestion}")
+                    sections.append(f"   - 位置：{issue.location}")
+            sections.append("")
+
         # 改进建议
         if idea_mining_result.suggestions:
             sections.append("## 改进建议\n")

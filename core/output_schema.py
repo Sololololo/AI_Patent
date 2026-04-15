@@ -7,7 +7,7 @@
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Dict, List, Optional
 from enum import Enum
 
 
@@ -72,11 +72,35 @@ class SuggestionResult(BaseModel):
     suggestions: List[Suggestion] = Field(description="改进建议列表")
 
 
+class QualityIssue(BaseModel):
+    """评分质量问题"""
+    severity: str = Field(description="严重程度：高/中/低")
+    title: str = Field(description="问题标题")
+    detail: str = Field(description="问题详情")
+    suggestion: str = Field(description="改进建议")
+    location: str = Field(description="对应区域", default="Step 3")
+
+
+class ScoreBreakdown(BaseModel):
+    """V2 评分拆解结果"""
+    strictness: str = Field(description="评分严格度：严格/标准/宽松")
+    raw_scores: Dict[str, int] = Field(description="模型原始评分")
+    adjusted_scores: Dict[str, int] = Field(description="校准后评分")
+    input_quality: float = Field(description="输入质量分 0-1", ge=0, le=1)
+    consistency: float = Field(description="一致性分 0-1", ge=0, le=1)
+    verifiability: float = Field(description="可验证性分 0-1", ge=0, le=1)
+    trust_score: float = Field(description="可信度分 0-1", ge=0, le=1)
+    final_factor: float = Field(description="最终缩放因子", ge=0, le=1.2)
+    issues: List[QualityIssue] = Field(description="质量问题清单")
+    summary: str = Field(description="评分摘要")
+
+
 class IdeaMiningResult(BaseModel):
     """Idea Mining 完整结果（串联三个子步骤）"""
     innovations: List[Innovation] = Field(description="创新点列表")
     evaluation: NoveltyEvaluation = Field(description="新颖性评估")
     suggestions: List[Suggestion] = Field(description="改进建议列表")
+    score_breakdown: Optional[ScoreBreakdown] = Field(description="V2 评分拆解", default=None)
 
 
 # ============================================================

@@ -1,7 +1,7 @@
 """AI 专利助手 - Streamlit 主入口
 
 多步骤向导式流程：
-Step 1: 配置 LLM → Step 2: 输入技术描述+场景+参考专利 → Step 3: 创新点挖掘
+Step 1: 配置 LLM → Step 2: 输入权利说明+场景+参考专利 → Step 3: 创新点挖掘
 → Step 4: 五要素+摘要+权利要求 → Step 5: 说明书生成 → Step 6: 导出报告
 """
 
@@ -9,6 +9,17 @@ import sys
 import os
 import logging
 import streamlit as st
+from core.output_schema import (
+    Innovation,
+    NoveltyEvaluation,
+    Suggestion,
+    IdeaMiningResult,
+    FiveElements,
+    PatentAbstract,
+    Claim,
+    ClaimSet,
+    PatentSpecification,
+)
 
 # 将项目根目录加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import Settings, create_settings
 from core.llm_client import LLMClient, LLMNotConfiguredError, LLMResponseParseError
 from core.session_manager import SessionManager
+from core.scoring import apply_quality_scoring
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -50,6 +62,7 @@ def init_session_state():
         "abstract_result": None,
         "claims": None,
         "specification": None,
+        "score_strictness": "标准",
         # 导出
         "export_path": None,
     }
@@ -80,6 +93,18 @@ def reset_results():
     st.session_state.claims = None
     st.session_state.specification = None
     st.session_state.export_path = None
+
+
+def start_new_project():
+    """清空当前会话与输入，开始一个全新项目"""
+    st.session_state.current_session_id = None
+    st.session_state.current_step = 1
+    st.session_state.has_unsaved_changes = False
+    st.session_state.invention_name = ""
+    st.session_state.technical_description = ""
+    st.session_state.scenarios = []
+    st.session_state.reference_patent_texts = []
+    reset_results()
 
 
 def get_session_manager() -> SessionManager:
@@ -115,6 +140,22 @@ def save_current_session():
         st.session_state.specification.model_dump() if st.session_state.specification else None
     )
     mgr.save(session)
+
+
+def _lines_to_list(raw_text: str) -> list[str]:
+    """将多行文本转为列表，自动过滤空行"""
+    return [line.strip() for line in raw_text.splitlines() if line.strip()]
+
+
+def _apply_v2_scoring(result: IdeaMiningResult) -> IdeaMiningResult:
+    """应用 V2 评分引擎（保留原始分并输出可解释拆解）。"""
+    return apply_quality_scoring(
+        result=result,
+        technical_description=st.session_state.technical_description,
+        scenarios=st.session_state.scenarios,
+        reference_patents=st.session_state.reference_patent_texts or None,
+        strictness=st.session_state.get("score_strictness", "标准"),
+    )
 
 
 def load_session_to_state(session_id: str):
@@ -188,14 +229,12 @@ with st.sidebar:
                         st.success("已保存！")
                 with col_new:
                     if st.button("➕ 新建项目", key="new_session_btn"):
-                        reset_results()
-                        st.session_state.current_session_id = None
-                        st.session_state.current_step = 1
+                        start_new_project()
                         st.rerun()
     else:
         st.info("暂无打开的项目")
         if st.button("➕ 新建项目", key="new_session_empty", type="primary"):
-            st.session_state.current_step = 1
+            start_new_project()
             st.rerun()
 
     if sessions:
@@ -258,11 +297,29 @@ with st.sidebar:
         st.error("❌ 请先配置 API Key")
 
     st.divider()
+    st.header("🧮 V2 评分引擎")
+    score_strictness = st.selectbox(
+        "评分严格度",
+        options=["严格", "标准", "宽松"],
+        index=["严格", "标准", "宽松"].index(st.session_state.get("score_strictness", "标准")),
+        help="严格度越高，对低质量输入降权越明显。",
+    )
+    st.session_state.score_strictness = score_strictness
+    st.caption("评分展示：原始分 + 可信度 + 校准分（可重评分）")
+    with st.expander("核心计算原则", expanded=False):
+        st.markdown(
+            "- 证据优先：输入质量、一致性、可验证性共同决定可信度。\n"
+            "- 低信息保护：当权利说明或可验证性过低时，综合分触发硬上限封顶。\n"
+            "- 严格度单调：严格 > 标准 > 宽松，容错逐级提高。\n"
+            "- 可解释输出：保留原始分，并展示校准因子与问题清单。"
+        )
+
+    st.divider()
 
     # 进度指示器
     st.header("📍 当前进度")
     steps = [
-        "1. 输入技术描述",
+        "1. 输入权利说明",
         "2. 上传参考专利",
         "3. 创新点挖掘",
         "4. 五要素 & 摘要 & 权利要求",
@@ -283,22 +340,22 @@ with st.sidebar:
 # ============================================================
 
 st.title("📋 AI 专利助手")
-st.caption("从技术描述到完整专利文档，逐步引导生成")
+st.caption("从权利说明到完整专利文档，逐步引导生成")
 
 step = st.session_state.current_step
 
 
 # ============================================================
-# Step 1: 输入技术描述和场景
+# Step 1: 输入权利说明和场景
 # ============================================================
 if step == 1:
-    st.header("Step 1: 描述你的技术方案")
+    st.header("Step 1: 填写权利说明")
 
     st.markdown("""
-    请尽可能详细地描述你的技术方案。以下信息越充分，生成质量越高：
-    - 你要解决什么问题？
-    - 你的技术方案是什么？
-    - 方案的关键技术特征有哪些？
+    请尽可能详细填写你的**权利说明**。以下信息越充分，生成质量越高：
+    - 你主张保护的核心技术点是什么？
+    - 权利边界与关键限定条件是什么？
+    - 可量化的技术效果或性能指标是什么？
     """)
 
     invention_name = st.text_input(
@@ -308,10 +365,10 @@ if step == 1:
     )
 
     technical_description = st.text_area(
-        "技术描述",
+        "权利说明",
         value=st.session_state.technical_description,
         height=250,
-        placeholder="请详细描述你的技术方案，包括要解决的问题、采用的技术手段、预期的技术效果等...",
+        placeholder="请详细填写权利说明，包括核心权利点、边界条件、关键技术特征、预期技术效果等...",
     )
 
     st.subheader("应用场景（必填，至少 1 个）")
@@ -345,7 +402,7 @@ if step == 1:
     )
 
     if not can_proceed:
-        st.info("请填写发明名称、技术描述和至少 1 个应用场景")
+        st.info("请填写发明名称、权利说明和至少 1 个应用场景")
 
     col1, col2 = st.columns([1, 5])
     with col1:
@@ -372,10 +429,11 @@ if step == 1:
 elif step == 2:
     st.header("Step 2: 参考专利（可选）")
     st.markdown("""
-    上传 1-3 篇与你技术方案相近的已有专利（PDF 或直接粘贴文本），AI 会分析你的方案与它们的差异，更精准地挖掘创新点和评估新颖性。
+    上传 1-3 篇与你权利说明**相关、邻近**的已有专利（PDF 或直接粘贴文本），AI 会分析你的方案与它们的差异，更精准地挖掘创新点和评估新颖性。
     
     没有参考专利也可以跳过，AI 会基于自身知识进行分析。
     """)
+    st.warning("请尽量选择技术路线接近、问题域相邻的参考专利。参考专利的选择准确性、合法性和使用后果由用户自行负责。")
 
     reference_patent_texts = st.session_state.get("reference_patent_texts", [])
 
@@ -478,14 +536,14 @@ elif step == 3:
     # 回显输入
     with st.expander("查看输入信息", expanded=False):
         st.markdown(f"**发明名称**：{st.session_state.invention_name}")
-        st.markdown(f"**技术描述**：\n{st.session_state.technical_description}")
+        st.markdown(f"**权利说明**：\n{st.session_state.technical_description}")
         st.markdown(f"**应用场景**：\n" + "\n".join(f"- {s}" for s in st.session_state.scenarios))
         ref_count = len(st.session_state.reference_patent_texts)
         st.markdown(f"**参考专利**：{ref_count} 篇" if ref_count else "**参考专利**：无")
 
     if st.session_state.idea_mining_result is None:
         if st.button("🚀 开始创新点挖掘", type="primary"):
-            with st.spinner("AI 正在分析你的技术方案，挖掘创新点...（可能需要 1-2 分钟）"):
+            with st.spinner("AI 正在分析你的权利说明，挖掘创新点...（可能需要 1-2 分钟）"):
                 try:
                     from modules.idea_mining import IdeaMiningPipeline
                     pipeline = IdeaMiningPipeline(get_llm_client())
@@ -494,6 +552,7 @@ elif step == 3:
                         scenarios=st.session_state.scenarios,
                         reference_patents=st.session_state.reference_patent_texts or None,
                     )
+                    result = _apply_v2_scoring(result)
                     st.session_state.idea_mining_result = result
                     save_current_session()
                     st.rerun()
@@ -506,58 +565,137 @@ elif step == 3:
     else:
         result = st.session_state.idea_mining_result
 
-        # 创新点展示
-        st.subheader(f"发现 {len(result.innovations)} 个创新点")
-        for i, inn in enumerate(result.innovations, 1):
-            level_color = {"高": "🔴", "中": "🟡", "低": "🟢"}.get(inn.level, "⚪")
-            with st.expander(f"{level_color} 创新点 {i}: {inn.title}", expanded=(i <= 3)):
-                st.markdown(f"**类型**：{inn.innovation_type}")
-                st.markdown(f"**描述**：{inn.description}")
-                st.markdown(f"**技术价值**：{inn.technical_value}")
-                st.markdown(f"**创新程度**：{inn.level}")
+        st.info("以下内容均可直接编辑，修改后点击“保存本页修改”。支持按当前严格度进行 V2 重评分。")
 
-        # 新颖性评估
-        st.subheader("新颖性评估")
+        breakdown = result.score_breakdown
+        if breakdown:
+            st.subheader("V2 评分拆解")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            raw_overall = breakdown.raw_scores.get("overall_score", result.evaluation.overall_score)
+            adjusted_overall = breakdown.adjusted_scores.get("overall_score", result.evaluation.overall_score)
+            col_m1.metric("原始综合分", f"{raw_overall}/10")
+            col_m2.metric("可信度", f"{round(breakdown.trust_score * 10, 1)}/10")
+            col_m3.metric("校准综合分", f"{adjusted_overall}/10")
+            col_m4.metric("评分因子", f"{breakdown.final_factor:.3f}")
+
+            col_s1, col_s2, col_s3 = st.columns(3)
+            col_s1.progress(float(breakdown.input_quality), text=f"输入质量 {breakdown.input_quality:.2f}")
+            col_s2.progress(float(breakdown.consistency), text=f"一致性 {breakdown.consistency:.2f}")
+            col_s3.progress(float(breakdown.verifiability), text=f"可验证性 {breakdown.verifiability:.2f}")
+
+            if breakdown.issues:
+                with st.expander(f"问题清单（{len(breakdown.issues)}）", expanded=False):
+                    for idx, issue in enumerate(breakdown.issues, 1):
+                        st.markdown(
+                            f"**{idx}. [{issue.severity}] {issue.title}**\n\n"
+                            f"- 详情：{issue.detail}\n"
+                            f"- 建议：{issue.suggestion}\n"
+                            f"- 位置：{issue.location}"
+                        )
+            st.caption(breakdown.summary)
+        else:
+            st.warning("当前结果尚未生成 V2 评分拆解，请点击“V2 重评分”。")
+
+        # 创新点编辑
+        st.subheader(f"创新点（共 {len(result.innovations)} 条）")
+        edited_innovations = []
+        for i, inn in enumerate(result.innovations, 1):
+            with st.expander(f"创新点 {i}: {inn.title}", expanded=(i <= 2)):
+                title = st.text_input("标题", value=inn.title, key=f"inn_title_{i}")
+                innovation_type = st.text_input("类型", value=inn.innovation_type, key=f"inn_type_{i}")
+                level = st.selectbox(
+                    "创新程度",
+                    options=["高", "中", "低"],
+                    index=["高", "中", "低"].index(str(inn.level)) if str(inn.level) in ["高", "中", "低"] else 1,
+                    key=f"inn_level_{i}",
+                )
+                description = st.text_area("描述", value=inn.description, key=f"inn_desc_{i}", height=120)
+                technical_value = st.text_area("技术价值", value=inn.technical_value, key=f"inn_value_{i}", height=90)
+                edited_innovations.append(
+                    Innovation(
+                        title=title.strip(),
+                        innovation_type=innovation_type.strip(),
+                        level=level,
+                        description=description.strip(),
+                        technical_value=technical_value.strip(),
+                    )
+                )
+
+        # 新颖性评估编辑
+        st.subheader("新颖性评估（可编辑）")
         eval_ = result.evaluation
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("新颖性", f"{eval_.novelty_score}/10")
-        col2.metric("创造性", f"{eval_.creativity_score}/10")
-        col3.metric("市场价值", f"{eval_.market_value_score}/10")
-        col4.metric("综合评分", f"{eval_.overall_score}/10")
+        novelty_score = int(col1.number_input("新颖性", min_value=1, max_value=10, value=int(eval_.novelty_score), step=1))
+        creativity_score = int(col2.number_input("创造性", min_value=1, max_value=10, value=int(eval_.creativity_score), step=1))
+        market_value_score = int(col3.number_input("市场价值", min_value=1, max_value=10, value=int(eval_.market_value_score), step=1))
+        overall_score = int(col4.number_input("综合评分", min_value=1, max_value=10, value=int(eval_.overall_score), step=1))
+        technical_progress = st.text_area("技术进步性", value=eval_.technical_progress, key="eval_progress", height=100)
+        similarity_analysis = st.text_area("相似性分析", value=eval_.similarity_analysis, key="eval_similarity", height=80)
+        strengths_raw = st.text_area("优势（每行一条）", value="\n".join(eval_.strengths), key="eval_strengths", height=110)
+        weaknesses_raw = st.text_area("不足/风险（每行一条）", value="\n".join(eval_.weaknesses), key="eval_weaknesses", height=110)
 
-        st.markdown(f"**技术进步性**：{eval_.technical_progress}")
+        edited_evaluation = NoveltyEvaluation(
+            novelty_score=novelty_score,
+            creativity_score=creativity_score,
+            market_value_score=market_value_score,
+            overall_score=overall_score,
+            technical_progress=technical_progress.strip(),
+            strengths=_lines_to_list(strengths_raw),
+            weaknesses=_lines_to_list(weaknesses_raw),
+            similarity_analysis=similarity_analysis.strip() or "无参考专利",
+        )
 
-        col_s, col_w = st.columns(2)
-        with col_s:
-            st.markdown("**优势**")
-            for s in eval_.strengths:
-                st.markdown(f"- {s}")
-        with col_w:
-            st.markdown("**不足/风险**")
-            for w in eval_.weaknesses:
-                st.markdown(f"- {w}")
+        # 改进建议编辑
+        st.subheader("改进建议（可编辑）")
+        edited_suggestions = []
+        for i, sug in enumerate(result.suggestions, 1):
+            with st.expander(f"建议 {i}: {sug.direction}", expanded=False):
+                direction = st.text_input("改进方向", value=sug.direction, key=f"sug_direction_{i}")
+                suggestion = st.text_area("具体建议", value=sug.suggestion, key=f"sug_text_{i}", height=120)
+                expected_effect = st.text_area("预期效果", value=sug.expected_effect, key=f"sug_effect_{i}", height=90)
+                difficulty = st.selectbox(
+                    "实施难度",
+                    options=["高", "中", "低"],
+                    index=["高", "中", "低"].index(str(sug.difficulty)) if str(sug.difficulty) in ["高", "中", "低"] else 1,
+                    key=f"sug_diff_{i}",
+                )
+                edited_suggestions.append(
+                    Suggestion(
+                        direction=direction.strip(),
+                        suggestion=suggestion.strip(),
+                        expected_effect=expected_effect.strip(),
+                        difficulty=difficulty,
+                    )
+                )
 
-        # 改进建议
-        if result.suggestions:
-            st.subheader("改进建议")
-            for i, sug in enumerate(result.suggestions, 1):
-                diff_color = {"高": "🔴", "中": "🟡", "低": "🟢"}.get(sug.difficulty, "⚪")
-                with st.expander(f"{diff_color} 建议 {i}: {sug.direction}"):
-                    st.markdown(f"**建议**：{sug.suggestion}")
-                    st.markdown(f"**预期效果**：{sug.expected_effect}")
-                    st.markdown(f"**实施难度**：{sug.difficulty}")
+        if st.button("💾 保存本页修改", key="save_step3_edits"):
+            updated_result = IdeaMiningResult(
+                innovations=edited_innovations,
+                evaluation=edited_evaluation,
+                suggestions=edited_suggestions,
+            )
+            st.session_state.idea_mining_result = _apply_v2_scoring(updated_result)
+            save_current_session()
+            st.success("Step 3 修改已保存")
+            st.rerun()
 
-        # 重新生成 or 下一步
-        col1, col2, col3 = st.columns([1, 1, 4])
+        # 重新生成 / 重评分 / 下一步
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 3])
         with col1:
             if st.button("🔄 重新挖掘"):
                 st.session_state.idea_mining_result = None
                 st.rerun()
         with col2:
+            if st.button("🧮 V2 重评分"):
+                st.session_state.idea_mining_result = _apply_v2_scoring(result)
+                save_current_session()
+                st.success("已按当前严格度完成重评分")
+                st.rerun()
+        with col3:
             if st.button("下一步 →", type="primary"):
                 st.session_state.current_step = 4
                 st.rerun()
-        with col3:
+        with col4:
             pass
 
 
@@ -625,37 +763,89 @@ elif step == 4:
         abstract_result = st.session_state.abstract_result
         claims = st.session_state.claims
 
-        # 五要素
-        st.subheader("五要素分析")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**技术问题**")
-            st.info(five_elements.technical_problem)
-            st.markdown("**技术方案**")
-            st.info(five_elements.technical_solution)
-        with col2:
-            st.markdown("**技术效果**")
-            st.info(five_elements.technical_effect)
-            st.markdown("**技术特征**")
-            for feat in five_elements.technical_features:
-                st.markdown(f"- {feat}")
+        st.info("以下内容均可编辑，建议先人工修订再进入说明书和导出。")
 
-        st.markdown("**应用场景**")
-        for scene in five_elements.application_scenarios:
-            st.markdown(f"- {scene}")
+        # 五要素编辑
+        st.subheader("五要素分析（可编辑）")
+        technical_problem = st.text_area("技术问题", value=five_elements.technical_problem, key="fe_problem", height=100)
+        technical_solution = st.text_area("技术方案", value=five_elements.technical_solution, key="fe_solution", height=120)
+        technical_effect = st.text_area("技术效果", value=five_elements.technical_effect, key="fe_effect", height=100)
+        technical_features_raw = st.text_area(
+            "技术特征（每行一条）",
+            value="\n".join(five_elements.technical_features),
+            key="fe_features",
+            height=120,
+        )
+        app_scenarios_raw = st.text_area(
+            "应用场景（每行一条）",
+            value="\n".join(five_elements.application_scenarios),
+            key="fe_scenarios",
+            height=100,
+        )
 
-        # 摘要
-        st.subheader("专利摘要")
-        st.markdown(abstract_result.abstract)
-        st.caption(f"关键词：{'、'.join(abstract_result.keywords)}")
+        # 摘要编辑
+        st.subheader("专利摘要（可编辑）")
+        abstract_text = st.text_area("摘要正文", value=abstract_result.abstract, key="abs_text", height=180)
+        keywords_raw = st.text_input("关键词（用中文逗号分隔）", value="、".join(abstract_result.keywords), key="abs_keywords")
 
-        # 权利要求
-        st.subheader("权利要求书")
-        for claim in claims.claims:
-            type_label = "【独立】" if claim.claim_type == "独立权利要求" else f"【从属于第{claim.depends_on}条】"
-            st.markdown(f"**第 {claim.claim_number} 条** {type_label}")
-            st.markdown(claim.content)
-            st.divider()
+        # 权利要求编辑
+        st.subheader("权利要求书（可编辑）")
+        edited_claims = []
+        for i, claim in enumerate(claims.claims, 1):
+            with st.expander(f"第 {i} 条", expanded=(i <= 2)):
+                claim_type = st.selectbox(
+                    "类型",
+                    options=["独立权利要求", "从属权利要求"],
+                    index=0 if claim.claim_type == "独立权利要求" else 1,
+                    key=f"claim_type_{i}",
+                )
+                depends_on = None
+                if claim_type == "从属权利要求":
+                    depends_on = int(
+                        st.number_input(
+                            "从属于第几条",
+                            min_value=1,
+                            value=int(claim.depends_on) if claim.depends_on else max(1, i - 1),
+                            step=1,
+                            key=f"claim_dep_{i}",
+                        )
+                    )
+                content = st.text_area("权利要求内容", value=claim.content, key=f"claim_content_{i}", height=140)
+                edited_claims.append(
+                    Claim(
+                        claim_number=i,
+                        claim_type=claim_type,
+                        content=content.strip(),
+                        depends_on=depends_on,
+                    )
+                )
+
+        main_claim_summary = st.text_area(
+            "独立权利要求核心概括",
+            value=claims.main_claim_summary,
+            key="main_claim_summary",
+            height=100,
+        )
+
+        if st.button("💾 保存本页修改", key="save_step4_edits"):
+            st.session_state.five_elements = FiveElements(
+                technical_problem=technical_problem.strip(),
+                technical_solution=technical_solution.strip(),
+                technical_effect=technical_effect.strip(),
+                technical_features=_lines_to_list(technical_features_raw),
+                application_scenarios=_lines_to_list(app_scenarios_raw),
+            )
+            st.session_state.abstract_result = PatentAbstract(
+                abstract=abstract_text.strip(),
+                keywords=[k.strip() for k in keywords_raw.replace("，", "、").split("、") if k.strip()],
+            )
+            st.session_state.claims = ClaimSet(
+                claims=edited_claims,
+                main_claim_summary=main_claim_summary.strip(),
+            )
+            save_current_session()
+            st.success("Step 4 修改已保存")
+            st.rerun()
 
         # 导航
         col1, col2, col3 = st.columns([1, 1, 4])
@@ -702,22 +892,38 @@ elif step == 5:
     else:
         spec = st.session_state.specification
 
-        st.subheader(spec.title)
+        st.info("说明书支持在线编辑，保存后再导出。")
+        title = st.text_input("发明名称", value=spec.title, key="spec_title")
+        abstract = st.text_area("摘要", value=spec.abstract, key="spec_abstract", height=120)
+        technical_field = st.text_area("技术领域", value=spec.technical_field, key="spec_field", height=100)
+        background_art = st.text_area("背景技术", value=spec.background_art, key="spec_bg", height=180)
+        summary = st.text_area("发明内容", value=spec.summary, key="spec_summary", height=180)
+        detailed_description = st.text_area(
+            "具体实施方式",
+            value=spec.detailed_description,
+            key="spec_detail",
+            height=320,
+        )
+        drawings = st.text_area(
+            "附图说明",
+            value=spec.brief_description_of_drawings,
+            key="spec_drawings",
+            height=100,
+        )
 
-        with st.expander("技术领域", expanded=True):
-            st.markdown(spec.technical_field)
-
-        with st.expander("背景技术", expanded=True):
-            st.markdown(spec.background_art)
-
-        with st.expander("发明内容", expanded=True):
-            st.markdown(spec.summary)
-
-        with st.expander("具体实施方式", expanded=True):
-            st.markdown(spec.detailed_description)
-
-        with st.expander("附图说明", expanded=False):
-            st.markdown(spec.brief_description_of_drawings)
+        if st.button("💾 保存本页修改", key="save_step5_edits"):
+            st.session_state.specification = PatentSpecification(
+                title=title.strip(),
+                abstract=abstract.strip(),
+                technical_field=technical_field.strip(),
+                background_art=background_art.strip(),
+                summary=summary.strip(),
+                detailed_description=detailed_description.strip(),
+                brief_description_of_drawings=drawings.strip() or "本发明无附图",
+            )
+            save_current_session()
+            st.success("Step 5 修改已保存")
+            st.rerun()
 
         # 导航
         col1, col2, col3 = st.columns([1, 1, 4])
@@ -798,7 +1004,7 @@ elif step == 6:
     # 回到任意步骤修改
     st.subheader("返回修改")
     cols = st.columns(6)
-    step_names = ["技术描述", "参考专利", "创新点", "五要素&摘要", "说明书", "导出"]
+    step_names = ["权利说明", "参考专利", "创新点", "五要素&摘要", "说明书", "导出"]
     for i, (col, name) in enumerate(zip(cols, step_names), 1):
         with col:
             if st.button(name, key=f"go_step_{i}"):
