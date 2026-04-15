@@ -20,6 +20,9 @@ env/
 *.swp
 *.swo
 
+# 会话数据
+sessions/
+
 # 输出文件
 output/
 

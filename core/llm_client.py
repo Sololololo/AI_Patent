@@ -131,11 +131,15 @@ class LLMClient:
             logger.warning(f"JSON Mode 不支持，降级到普通模式: {e}")
 
         # 降级：普通请求 + 文本中提取 JSON
+        raw_response = ""
         try:
             content = self.chat(system_prompt, full_user_prompt, temperature=temp)
             return self._extract_json_from_text(content, response_model)
         except Exception as e:
-            raise LLMResponseParseError(f"无法解析 LLM 输出为 {response_model.__name__}: {e}", content)
+            raw_response = getattr(e, "raw_response", str(e))
+            raise LLMResponseParseError(
+                f"无法解析 LLM 输出为 {response_model.__name__}: {e}", raw_response
+            )
 
     def _extract_json_from_text(self, text: str, model: Type[T]) -> T:
         """从 LLM 输出文本中提取 JSON 并解析为 Pydantic 模型"""

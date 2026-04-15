@@ -78,7 +78,6 @@ class ReportExporter:
         """
         try:
             from docx import Document
-            from docx.shared import Pt, RGBColor
             from docx.enum.text import WD_ALIGN_PARAGRAPH
         except ImportError:
             raise ImportError("请安装 python-docx: pip install python-docx")

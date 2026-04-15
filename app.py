@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import Settings, create_settings
 from core.llm_client import LLMClient, LLMNotConfiguredError, LLMResponseParseError
+from core.session_manager import SessionManager
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -36,6 +37,8 @@ def init_session_state():
     """初始化所有 session state 变量"""
     defaults = {
         "current_step": 1,
+        "current_session_id": None,
+        "has_unsaved_changes": False,
         # 用户输入
         "technical_description": "",
         "scenarios": [],
@@ -79,10 +82,144 @@ def reset_results():
     st.session_state.export_path = None
 
 
+def get_session_manager() -> SessionManager:
+    return SessionManager()
+
+
+def save_current_session():
+    """保存当前会话到磁盘"""
+    if st.session_state.current_session_id is None:
+        return
+    mgr = get_session_manager()
+    session = mgr.load(st.session_state.current_session_id)
+    if session is None:
+        return
+    session.invention_name = st.session_state.invention_name
+    session.technical_description = st.session_state.technical_description
+    session.scenarios = st.session_state.scenarios
+    session.reference_patent_texts = st.session_state.reference_patent_texts
+    session.current_step = st.session_state.current_step
+    session.idea_mining_result = (
+        st.session_state.idea_mining_result.model_dump() if st.session_state.idea_mining_result else None
+    )
+    session.five_elements = (
+        st.session_state.five_elements.model_dump() if st.session_state.five_elements else None
+    )
+    session.abstract_result = (
+        st.session_state.abstract_result.model_dump() if st.session_state.abstract_result else None
+    )
+    session.claims = (
+        st.session_state.claims.model_dump() if st.session_state.claims else None
+    )
+    session.specification = (
+        st.session_state.specification.model_dump() if st.session_state.specification else None
+    )
+    mgr.save(session)
+
+
+def load_session_to_state(session_id: str):
+    """加载会话到 session_state"""
+    mgr = get_session_manager()
+    session = mgr.load(session_id)
+    if session is None:
+        return
+    st.session_state.current_session_id = session.session_id
+    st.session_state.current_step = session.current_step
+    st.session_state.invention_name = session.invention_name
+    st.session_state.technical_description = session.technical_description
+    st.session_state.scenarios = session.scenarios
+    st.session_state.reference_patent_texts = session.reference_patent_texts
+    st.session_state.idea_mining_result = None
+    st.session_state.five_elements = None
+    st.session_state.abstract_result = None
+    st.session_state.claims = None
+    st.session_state.specification = None
+    st.session_state.export_path = None
+    if session.idea_mining_result:
+        from core.output_schema import IdeaMiningResult
+        st.session_state.idea_mining_result = IdeaMiningResult(**session.idea_mining_result)
+    if session.five_elements:
+        from core.output_schema import FiveElements
+        st.session_state.five_elements = FiveElements(**session.five_elements)
+    if session.abstract_result:
+        from core.output_schema import PatentAbstract
+        st.session_state.abstract_result = PatentAbstract(**session.abstract_result)
+    if session.claims:
+        from core.output_schema import ClaimSet
+        st.session_state.claims = ClaimSet(**session.claims)
+    if session.specification:
+        from core.output_schema import PatentSpecification
+        st.session_state.specification = PatentSpecification(**session.specification)
+
+
 # ============================================================
-# 侧边栏：LLM 配置
+# 侧边栏：会话管理 + LLM 配置
 # ============================================================
 with st.sidebar:
+    st.header("📁 项目会话")
+
+    mgr = get_session_manager()
+    sessions = mgr.list_sessions()
+    current_id = st.session_state.current_session_id
+
+    if current_id:
+        for session in sessions:
+            if session.session_id == current_id:
+                col_name, col_del = st.columns([4, 1])
+                with col_name:
+                    st.success(f"📄 {session.display_name}")
+                with col_del:
+                    if st.button("🗑️", key=f"del_session_{session.session_id}", help="删除此项目"):
+                        mgr.delete(session.session_id)
+                        st.session_state.current_session_id = None
+                        st.session_state.current_step = 1
+                        st.session_state.invention_name = ""
+                        st.session_state.technical_description = ""
+                        st.session_state.scenarios = []
+                        st.session_state.reference_patent_texts = []
+                        reset_results()
+                        st.rerun()
+                st.caption(f"进度：{session.progress()} | {session.step_label()}")
+
+                col_save, col_new = st.columns(2)
+                with col_save:
+                    if st.button("💾 保存", key="save_session_btn"):
+                        save_current_session()
+                        st.success("已保存！")
+                with col_new:
+                    if st.button("➕ 新建项目", key="new_session_btn"):
+                        reset_results()
+                        st.session_state.current_session_id = None
+                        st.session_state.current_step = 1
+                        st.rerun()
+    else:
+        st.info("暂无打开的项目")
+        if st.button("➕ 新建项目", key="new_session_empty", type="primary"):
+            st.session_state.current_step = 1
+            st.rerun()
+
+    if sessions:
+        with st.expander("📂 历史项目", expanded=False):
+            for session in sessions[:10]:
+                if session.session_id == current_id:
+                    continue
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    if st.button(
+                        f"{session.display_name[:20]}",
+                        key=f"load_session_{session.session_id}",
+                    ):
+                        load_session_to_state(session.session_id)
+                        st.rerun()
+                with col2:
+                    if st.button("🗑️", key=f"del_hist_{session.session_id}"):
+                        mgr.delete(session.session_id)
+                        st.rerun()
+                st.caption(f"  {session.progress()} | {session.updated_at[:10]}")
+
+    st.divider()
+
+    # LLM 配置
     st.header("⚙️ LLM 配置")
 
     api_url = st.text_input(
@@ -215,6 +352,16 @@ if step == 1:
         if st.button("下一步 →", disabled=not can_proceed, type="primary"):
             st.session_state.invention_name = invention_name.strip()
             st.session_state.technical_description = technical_description.strip()
+            if st.session_state.current_session_id is None:
+                mgr = get_session_manager()
+                session = mgr.create(
+                    invention_name=invention_name.strip(),
+                    technical_description=technical_description.strip(),
+                    scenarios=st.session_state.scenarios,
+                )
+                st.session_state.current_session_id = session.session_id
+            else:
+                save_current_session()
             st.session_state.current_step = 2
             st.rerun()
 
@@ -284,9 +431,26 @@ elif step == 2:
             placeholder="将专利全文或摘要粘贴到这里...",
         )
         if st.button("添加文本") and pasted_text.strip():
-            reference_patent_texts.append(pasted_text.strip())
-            st.session_state.reference_patent_texts = reference_patent_texts
-            st.rerun()
+            with st.spinner("正在提取专利信息..."):
+                try:
+                    from modules.patent_search import PatentSearchService
+                    service = PatentSearchService(get_llm_client())
+                    extracted = service.extract_from_text(pasted_text.strip())
+                    ref_text = (
+                        f"标题：{extracted.title}\n"
+                        f"技术领域：{extracted.technical_field}\n"
+                        f"技术问题：{extracted.technical_problem}\n"
+                        f"技术方案：{extracted.technical_solution}\n"
+                        f"技术效果：{extracted.technical_effect}\n"
+                        f"关键特征：{', '.join(extracted.key_features)}\n"
+                        f"独立权利要求：{extracted.main_claim}"
+                    )
+                    reference_patent_texts.append(ref_text)
+                    st.session_state.reference_patent_texts = reference_patent_texts
+                    st.success("提取完成！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"提取失败：{e}")
     else:
         st.info("已达到参考专利上限（3篇）")
 
@@ -331,6 +495,7 @@ elif step == 3:
                         reference_patents=st.session_state.reference_patent_texts or None,
                     )
                     st.session_state.idea_mining_result = result
+                    save_current_session()
                     st.rerun()
                 except LLMNotConfiguredError as e:
                     st.error(f"配置错误：{e}")
@@ -452,6 +617,7 @@ elif step == 4:
                     st.stop()
 
             st.success("生成完成！")
+            save_current_session()
             st.rerun()
     else:
         # 展示结果
@@ -529,6 +695,7 @@ elif step == 5:
                     )
                     st.session_state.specification = spec
                     st.success("说明书生成完成！")
+                    save_current_session()
                     st.rerun()
                 except Exception as e:
                     st.error(f"生成失败：{e}")

@@ -9,11 +9,54 @@
 pip install -r requirements.txt
 
 # 2. 启动应用（API Key 在界面侧边栏配置）
-cd ai_patent
 streamlit run app.py
 ```
 
 ## 使用流程
+
+```mermaid
+flowchart TD
+    subgraph 输入层["📥 Step 1-2: 输入"]
+        A1["输入技术描述\n+ 应用场景"]
+        A2["上传参考专利\n(可选, PDF 或粘贴)"]
+        A1 --> A2
+    end
+
+    subgraph 创新层["💡 Step 3: 创新点挖掘"]
+        B1["创新点检测\n场景发散"]
+        B2["新颖性评估\n与参考专利对比"]
+        B3["改进建议生成"]
+        B1 --> B2 --> B3
+    end
+
+    subgraph 写作层["✍️ Step 4: 结构化写作"]
+        C1["五要素分析\n问题/方案/效果/特征/场景"]
+        C2["专利摘要生成\n关键词提取"]
+        C3["权利要求书撰写\n独立 + 从属权利要求"]
+        C1 --> C2 --> C3
+    end
+
+    subgraph 生成层["📄 Step 5: 说明书"]
+        D1["完整专利说明书生成\n技术领域/背景/实施方式"]
+    end
+
+    subgraph 导出层["💾 Step 6: 导出"]
+        E1["Markdown 报告"]
+        E2["Word 文档"]
+    end
+
+    A2 --> B1
+    B3 --> C1
+    C3 --> D1
+    D1 --> E1
+    D1 --> E2
+
+    style 输入层 fill:#e1f5fe
+    style 创新层 fill:#fff3e0
+    style 写作层 fill:#e8f5e9
+    style 生成层 fill:#fce4ec
+    style 导出层 fill:#f3e5f5
+```
 
 **6 步向导，每一步都能回退修改：**
 
@@ -44,7 +87,8 @@ ai_patent/
 ├── core/                   # 核心基础设施
 │   ├── llm_client.py       # LLM 客户端（结构化输出 + JSON Mode）
 │   ├── output_schema.py    # Pydantic 输出模型定义
-│   └── prompt_loader.py    # Prompt 模板加载器
+│   ├── prompt_loader.py    # Prompt 模板加载器
+│   └── session_manager.py  # 会话持久化管理
 ├── modules/                # 业务模块
 │   ├── idea_mining/        # 创新点挖掘流水线（3步串联）
 │   ├── structured_writing/ # 五要素 → 摘要 → 权利要求
@@ -52,7 +96,26 @@ ai_patent/
 │   ├── patent_search/      # 参考专利 PDF/文本解析
 │   └── presentation/       # 报告导出（Markdown + Word）
 ├── prompts/                # Prompt 模板（8个 Markdown 文件）
+├── sessions/               # 会话数据存储目录
 └── output/                 # 导出文件存放目录
+```
+
+## 项目会话管理
+
+每个专利项目都会自动保存到 `sessions/` 目录，支持：
+
+- **自动保存**：每步生成完成后自动保存
+- **手动保存**：侧边栏随时点击"💾 保存"
+- **续写**：关闭页面后，下次打开可从历史项目中继续
+- **历史记录**：保留最近 10 个项目，可随时加载或删除
+
+```mermaid
+flowchart LR
+    A["📝 新建项目"] --> B["💻 填写信息"]
+    B --> C["🤖 AI 生成"]
+    C -->|"自动保存"| D["💾 本地存储"]
+    D -->|"随时"| E["📂 加载历史"]
+    E --> B
 ```
 
 ## 与原项目对比
