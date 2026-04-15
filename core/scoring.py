@@ -60,21 +60,25 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 
 def _extract_terms(text: str) -> List[str]:
-    """提取中英术语词元（轻量规则版）。"""
+    """提取中英术语词元（jieba关键词提取 + 英文词元）。"""
     if not text:
         return []
 
     english = re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", text.lower())
-    chinese_sequences = re.findall(r"[\u4e00-\u9fff]{2,}", text)
-    chinese_terms: List[str] = []
-    for seq in chinese_sequences:
-        if len(seq) <= 3:
-            chinese_terms.append(seq)
-            continue
-        # 对长中文串拆 2-4 字片段，提升重叠匹配鲁棒性
-        for n in (2, 3, 4):
-            for i in range(0, len(seq) - n + 1):
-                chinese_terms.append(seq[i : i + n])
+
+    try:
+        import jieba.analyse
+        chinese_terms = jieba.analyse.extract_tags(text, topK=30)
+    except ImportError:
+        chinese_sequences = re.findall(r"[\u4e00-\u9fff]{2,}", text)
+        chinese_terms = []
+        for seq in chinese_sequences:
+            if len(seq) <= 3:
+                chinese_terms.append(seq)
+                continue
+            for n in (2, 3, 4):
+                for i in range(0, len(seq) - n + 1):
+                    chinese_terms.append(seq[i : i + n])
 
     terms = english + chinese_terms
     return [t for t in terms if len(t.strip()) >= 2]
@@ -122,7 +126,7 @@ def _score_input_quality(
     )
 
 
-def _score_consistency(technical_description: str, result: IdeaMiningResult) -> float:
+def _score_consistency(technical_description: str, result: IdeaMiningResult, llm_client=None) -> float:
     desc_terms = set(_extract_terms(technical_description))
     if not desc_terms:
         return 0.15
@@ -144,8 +148,38 @@ def _score_consistency(technical_description: str, result: IdeaMiningResult) -> 
     if len(result.evaluation.weaknesses) == 0:
         weak_eval_penalty += 0.10
 
-    base = _clamp(0.20 + overlap_ratio * 1.2, 0.0, 1.0)
+    lexical_score = _clamp(0.20 + overlap_ratio * 1.2, 0.0, 1.0)
+
+    if llm_client and llm_client.is_configured:
+        try:
+            llm_score = _score_consistency_llm(technical_description, result, llm_client)
+            base = 0.4 * lexical_score + 0.6 * llm_score
+        except Exception:
+            base = lexical_score
+    else:
+        base = lexical_score
+
     return _clamp(base - duplication_penalty - weak_eval_penalty, 0.0, 1.0)
+
+
+def _score_consistency_llm(technical_description: str, result: IdeaMiningResult, llm_client) -> float:
+    from pydantic import BaseModel, Field
+    from core.llm_client import LLMClient
+
+    class ConsistencyScore(BaseModel):
+        score: float = Field(ge=0.0, le=1.0, description="一致性评分0-1")
+
+    innovations_str = "\n".join(
+        f"- {inn.title}: {inn.description}" for inn in result.innovations
+    )
+    system_prompt = "你是一个专利审查一致性评估器。评估创新点与原始技术描述的语义一致性，返回0-1的分数。"
+    user_prompt = (
+        f"技术描述：\n{technical_description[:2000]}\n\n"
+        f"创新点：\n{innovations_str[:2000]}\n\n"
+        f"请评估这些创新点与技术描述的语义一致性（0=完全无关，1=高度一致）。"
+    )
+    response = llm_client.chat_structured(system_prompt, user_prompt, ConsistencyScore)
+    return _clamp(response.score, 0.0, 1.0)
 
 
 def _score_verifiability(result: IdeaMiningResult) -> float:
@@ -260,12 +294,13 @@ def apply_quality_scoring(
     scenarios: List[str],
     reference_patents: Optional[List[str]] = None,
     strictness: str = "标准",
+    llm_client=None,
 ) -> IdeaMiningResult:
     """对结果执行 V2 评分校准并返回更新后的结果对象。"""
     profile = STRICTNESS_PROFILES.get(strictness, STRICTNESS_PROFILES["标准"])
 
     input_quality = _score_input_quality(technical_description, scenarios, reference_patents)
-    consistency = _score_consistency(technical_description, result)
+    consistency = _score_consistency(technical_description, result, llm_client)
     verifiability = _score_verifiability(result)
 
     input_adj = max(profile["input_floor"], input_quality)

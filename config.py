@@ -18,9 +18,6 @@ class Settings(BaseSettings):
     # 输出路径
     output_dir: str = "output"
 
-    # 向量检索（预留）
-    embedding_model: str = "BAAI/bge-small-zh-v1.5"
-
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
