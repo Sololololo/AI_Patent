@@ -23,19 +23,20 @@ flowchart TD
     end
 
     subgraph 创新层["💡 Step 3: 创新点挖掘"]
-        B1["创新点检测\n场景发散 + 跨域启发"]
-        B1a{"反模式过滤\n8条AI领域反模式"}
-        B2["生成者-审查者自博弈\n质疑 → 反驳 → 过滤"]
+        B1["创新点检测\n场景发散 + 跨域启发 + Few-Shot示例"]
+        B1a{"反模式过滤\n24条AI领域反模式"}
+        B2["生成者-审查者自博弈\n3轮迭代优化 + 多视角审查"]
         B3["结构化新颖性推理\n5步推理链强制说理"]
         B4["改进建议生成"]
         B1 --> B1a --> B2 --> B3 --> B4
+        B4a["多版本对比生成\n2-3个版本供选择"]
     end
 
     subgraph 评分层["🧮 V2 评分引擎"]
         S1["输入质量\n长度+术语密度+场景"]
         S2["语义一致性\njieba+LLM语义评分"]
         S3["可验证性\n量化指标+边界条件"]
-        S4["校准输出\n原始分+可信度+校准分"]
+        S4["校准输出\n原始分+可信度+校准分 + 扣分理由"]
         S1 --> S4
         S2 --> S4
         S3 --> S4
@@ -45,13 +46,13 @@ flowchart TD
         C1["五要素分析\n问题/方案/效果/特征/场景"]
         C2["专利摘要生成\n关键词提取"]
         C3["权利要求书撰写\n独立 + 从属权利要求"]
-        C4{"合规校验\n从属关系/字数/完整性"}
+        C4{"合规校验\n完整专利法规则（20+条）"}
         C1 --> C2 --> C3 --> C4
     end
 
     subgraph 生成层["📄 Step 5: 说明书"]
         D1["完整专利说明书生成\n技术领域/背景/实施方式"]
-        D2{"说明书合规校验\n各节完整性+实施例数量"}
+        D2{"说明书合规校验\n完整专利法规则（10+条）"}
         D1 --> D2
     end
 
@@ -88,12 +89,12 @@ flowchart TD
 
 任何 OpenAI 兼容的 API 均可使用，在侧边栏配置即可切换：
 
-| 提供商 | API URL | 模型名称 |
-|--------|---------|----------|
-| DeepSeek | `https://api.deepseek.com/v1/chat/completions` | `deepseek-chat` |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `glm-4` |
-| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | `qwen-plus` |
-| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-4o` |
+| 提供商      | API URL                                                              | 模型名称            |
+| -------- | -------------------------------------------------------------------- | --------------- |
+| DeepSeek | `https://api.deepseek.com/v1/chat/completions`                       | `deepseek-chat` |
+| 智谱 GLM   | `https://open.bigmodel.cn/api/paas/v4/chat/completions`              | `glm-4`         |
+| 通义千问     | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | `qwen-plus`     |
+| OpenAI   | `https://api.openai.com/v1/chat/completions`                         | `gpt-4o`        |
 
 ## 项目结构
 
@@ -149,15 +150,16 @@ flowchart LR
 
 ## 版本对比
 
-| 维度 | v1 | v2 | v3 (本次) |
-|------|----|----|-----------|
-| LLM 调用 | LangChain LLMChain（已废弃） | openai SDK 直调 | 同v2 |
-| 输出解析 | 逐行字符串匹配 | Pydantic + JSON Mode | 同v2 |
-| 创新挖掘 | 三步独立无串联 | 三步串联流水线 | **+自博弈+反模式+跨域启发** |
-| 新颖性评估 | LLM给个分数 | LLM给个分数 | **5步推理链强制说理** |
-| 一致性评分 | Jaccard词汇重叠 | Jaccard词汇重叠 | **jieba+LLM语义评分** |
-| 合规校验 | 无 | 无 | **纯规则：从属关系/字数/完整性** |
-| 参考专利 | 可选，无强制对比 | 可选，无强制对比 | **推荐，强制逐条对比差异** |
-| app.py | 1012行单文件 | 1012行单文件 | **55行+8个ui模块** |
-| 术语提取 | 正则匹配 | 正则匹配 | **jieba关键词提取** |
-| 依赖数量 | 30+ 个 | 7 个 | 8 个（+jieba） |
+| 维度     | v1                      | v2                   | v3 (本次)             |
+| ------ | ----------------------- | -------------------- | ------------------- |
+| LLM 调用 | LangChain LLMChain（已废弃） | openai SDK 直调        | 同v2                 |
+| 输出解析   | 逐行字符串匹配                 | Pydantic + JSON Mode | 同v2                 |
+| 创新挖掘   | 三步独立无串联                 | 三步串联流水线              | **+自博弈+反模式+跨域启发**   |
+| 新颖性评估  | LLM给个分数                 | LLM给个分数              | **5步推理链强制说理**       |
+| 一致性评分  | Jaccard词汇重叠             | Jaccard词汇重叠          | **jieba+LLM语义评分**   |
+| 合规校验   | 无                       | 无                    | **纯规则：从属关系/字数/完整性** |
+| 参考专利   | 可选，无强制对比                | 可选，无强制对比             | **推荐，强制逐条对比差异**     |
+| app.py | 1012行单文件                | 1012行单文件             | **55行+8个ui模块**      |
+| 术语提取   | 正则匹配                    | 正则匹配                 | **jieba关键词提取**      |
+| 依赖数量   | 30+ 个                   | 7 个                  | 8 个（+jieba）         |
+
