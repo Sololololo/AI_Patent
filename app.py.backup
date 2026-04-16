@@ -1,0 +1,54 @@
+"""AI 专利助手 v2.0 - Streamlit 主入口（备份）
+
+多步骤向导式流程：
+Step 1: 输入权利说明 → Step 2: 上传参考专利 → Step 3: 创新点挖掘（含自博弈）
+→ Step 4: 五要素+摘要+权利要求 → Step 5: 说明书生成 → Step 6: 导出报告
+"""
+
+import sys
+import os
+import logging
+import streamlit as st
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from ui import (
+    init_session_state,
+    render_sidebar,
+    render_step1,
+    render_step2,
+    render_step3,
+    render_step4,
+    render_step5,
+    render_step6,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+
+st.set_page_config(
+    page_title="AI 专利助手",
+    page_icon="📋",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+init_session_state()
+render_sidebar()
+
+st.title("📋 AI 专利助手")
+st.caption("从权利说明到完整专利文档，逐步引导生成")
+
+step = st.session_state.current_step
+
+if step == 1:
+    render_step1()
+elif step == 2:
+    render_step2()
+elif step == 3:
+    render_step3()
+elif step == 4:
+    render_step4()
+elif step == 5:
+    render_step5()
+elif step == 6:
+    render_step6()
